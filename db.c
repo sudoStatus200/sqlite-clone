@@ -123,20 +123,74 @@ void deserialize_row(void *source, Row *destination)
     memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
-void execute_statement(Statement *statement)
+ExecuteResult execute_insert(Statement *statement, Table *table)
+{
+    if (table->num_rows >= TABLE_MAX_ROWS)
+    {
+        return EXECUTE_TABLE_FULL;
+    }
+    Row *row_to_insert = &(statement->row_to_insert);
+    serialize_row(row_to_insert, row_slot(table, table->num_rows));
+    table->num_rows += 1;
+    return EXECUTE_SUCCESS;
+}
+ExecuteResult execute_select(Statement *statement, Table *table)
+{
+    Row row;
+    for (uint32_t i = 0; i < table->num_rows; i++)
+    {
+        deserialize_row(row_slot(table, i), &row);
+        print_row(&row);
+    }
+    return EXECUTE_SUCCESS;
+}
+
+ExecuteResult execute_statement(Statement *statement, Table *table)
 {
     switch (statement->type)
     {
     case (STATEMENT_INSERT):
-        printf("This is where we would do an insert.\n");
-        break;
+        return execute_insert(statement, table);
     case (STATEMENT_SELECT):
-        printf("This is where we would do a select.\n");
-        break;
+
+        return execute_select(statement, table);
     }
 }
 
+Table *new_table()
+{
+    Table *table = malloc(sizeof(Table));
+    table->num_rows = 0;
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++)
+    {
+        table->pages[i] = NULL;
+    }
+    return table;
+}
+
+void free_table(Table *table)
+{
+    for (int i = 0; table->pages[i]; i++)
+    {
+        free(table->pages[i]);
+    }
+    free(table);
+}
+
 void print_prompt() { printf("db > "); }
+
+void *row_slot(Table *table, uint32_t row_num)
+{
+    uint32_t page_num = row_num / ROWS_PER_PAGE;
+    void *page = table->pages[page_num];
+    if (page == NULL)
+    {
+        page = table->pages[page_num] = malloc(PAGE_SIZE);
+    }
+    uint32_t row_offset = row_num % ROWS_PER_PAGE;
+    uint32_t byte_offset = row_offset * ROW_SIZE;
+    return page + byte_offset;
+}
 
 void read_input(InputBuffer *input_buffer)
 {
@@ -160,6 +214,7 @@ void close_input_buffer(InputBuffer *input_buffer)
 
 int main(int argc, char *argv[])
 {
+    Table *table = new_table();
     InputBuffer *input_buffer = new_input_buffer();
     while (true)
     {
@@ -184,15 +239,24 @@ int main(int argc, char *argv[])
             switch (prepare_statement(input_buffer, &statement))
             {
             case (PREPARE_SUCCESS):
-
                 break;
+            case (PREPARE_SYNTAX_ERROR):
+                printf("Syntax error. Could not parse  statement\n");
+                continue;
             case (PREPARE_UNRECOGNIZED_STATEMENT):
                 printf("Unrecognized keyword at start of '%s'.\n", input_buffer->buffer);
                 continue;
             }
 
-            execute_statement(&statement);
-            printf("Executed.\n");
+            switch (execute_statement(&statement, table))
+            {
+            case (EXECUTE_SUCCESS):
+                printf("Executed.\n");
+                break;
+            case (EXECUTE_TABLE_FULL):
+                printf("Error: Table full.\n");
+                break;
+            }
         }
     }
 }
